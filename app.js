@@ -194,7 +194,6 @@ function renderGenerator() {
                 <input id="logoSize" type="range" min="8" max="24" value="${defaults.logoSize}">
                 <small class="hint">Recommended: 15%. Warning above 20%.</small>
               </label>
-              ${field("logoColor", "Logo outline color", defaults.logoColor, "color")}
               <label class="field">
                 <span>Logo backing</span>
                 <select id="logoBacking">
@@ -209,7 +208,12 @@ function renderGenerator() {
               <label class="field">
                 <span>Logo upload</span>
                 <input id="logoInput" type="file" accept="image/*">
-                <small class="hint">The app uses only the logo outline. The logo color is independent from the QR colors.</small>
+                <small class="hint">The app uses only the logo outline. It is not filled with the original logo background.</small>
+              </label>
+              <label class="field">
+                <span>Logo colour</span>
+                <input id="logoColor" type="color" value="${defaults.logoColor}">
+                <small class="hint">Only changes the logo outline. QR foreground/background stay unchanged.</small>
               </label>
               <label class="field">
                 <span>Logo border</span>
