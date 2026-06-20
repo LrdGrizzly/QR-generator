@@ -56,7 +56,8 @@ const defaults = {
   moduleStyle: "square",
   errorCorrection: "H",
   logoSize: 15,
-  logoBacking: "rounded",
+  logoColor: "#d1222b",
+  logoBacking: "none",
   logoBorder: true,
   labelCompany: "Example Company",
   labelWebsite: "example.com",
@@ -193,13 +194,14 @@ function renderGenerator() {
                 <input id="logoSize" type="range" min="8" max="24" value="${defaults.logoSize}">
                 <small class="hint">Recommended: 15%. Warning above 20%.</small>
               </label>
+              ${field("logoColor", "Logo outline color", defaults.logoColor, "color")}
               <label class="field">
                 <span>Logo backing</span>
                 <select id="logoBacking">
-                  <option value="rounded" selected>White rounded square</option>
+                  <option value="none" selected>No backing / transparent</option>
+                  <option value="rounded">White rounded square</option>
                   <option value="square">White square</option>
                   <option value="circle">White circle</option>
-                  <option value="none">None</option>
                 </select>
               </label>
             </div>
@@ -207,7 +209,7 @@ function renderGenerator() {
               <label class="field">
                 <span>Logo upload</span>
                 <input id="logoInput" type="file" accept="image/*">
-                <small class="hint">The app uses an outline-only version of the logo so it integrates cleanly in the QR.</small>
+                <small class="hint">The app uses only the logo outline. The logo color is independent from the QR colors.</small>
               </label>
               <label class="field">
                 <span>Logo border</span>
@@ -330,7 +332,8 @@ function collectValues() {
     moduleStyle: get("moduleStyle") || "square",
     errorCorrection: get("errorCorrection") || "H",
     logoSize: Number(get("logoSize") || 15),
-    logoBacking: get("logoBacking") || "rounded",
+    logoColor: get("logoColor") || "#d1222b",
+    logoBacking: get("logoBacking") || "none",
     logoBorder: get("logoBorder") !== "no",
     labelCompany: get("labelCompany"),
     labelWebsite: get("labelWebsite"),
@@ -419,6 +422,12 @@ function renderStatus(values, payload, error) {
   items.push([contrast >= 4.5 ? "ok" : "warn", contrast >= 4.5 ? "QR contrast is strong." : "QR contrast is low; scanning may suffer."]);
   items.push([values.logoSize <= 20 ? "ok" : "warn", values.logoSize <= 20 ? "Logo size is within the safe range." : "Logo is above 20%; test before print."]);
   items.push([state.logoOutlineImage ? "ok" : "warn", state.logoOutlineImage ? "Logo is converted to an outline-only mark." : "No logo uploaded."]);
+  if (state.logoOutlineImage) {
+    const logoVsLight = contrastRatio(values.logoColor, values.qrLight);
+    const logoVsDark = contrastRatio(values.logoColor, values.qrDark);
+    const logoContrastOk = values.logoBacking !== "none" ? logoVsLight >= 3 : Math.max(logoVsLight, logoVsDark) >= 3;
+    items.push([logoContrastOk ? "ok" : "warn", logoContrastOk ? "Logo color is independent and visible." : "Logo color may not stand out enough."]);
+  }
   if (payload.length > 1200) items.push(["warn", "QR data is long; scan testing is strongly recommended."]);
   document.getElementById("statusList").innerHTML = items.map(([type, text]) => `
     <div class="status-item ${type}">
@@ -631,7 +640,7 @@ function drawLogo(ctx, values, x, y, size) {
       if (values.logoBorder) ctx.stroke();
     }
   }
-  drawTintedImage(ctx, img, cx, cy, logoSize, logoSize, values.qrDark);
+  drawTintedImage(ctx, img, cx, cy, logoSize, logoSize, values.logoColor);
 }
 
 function drawTintedImage(ctx, img, x, y, width, height, color) {
@@ -700,7 +709,7 @@ function renderSvg(qr, values) {
       if (values.logoBacking === "circle") svg += `<circle cx="${qrSize / 2}" cy="${qrSize / 2}" r="${bw / 2}" fill="#fff" ${values.logoBorder ? `stroke="rgba(17,24,39,0.18)"` : ""}/>`;
       else svg += `<rect x="${bx}" y="${by}" width="${bw}" height="${bw}" rx="${values.logoBacking === "rounded" ? bw * 0.16 : 0}" fill="#fff" ${values.logoBorder ? `stroke="rgba(17,24,39,0.18)"` : ""}/>`;
     }
-    const logoHref = createTintedLogoDataUrl(values.qrDark) || state.logoOutlineDataUrl;
+    const logoHref = createTintedLogoDataUrl(values.logoColor) || state.logoOutlineDataUrl;
     svg += `<image href="${escapeAttr(logoHref)}" x="${x}" y="${y}" width="${logo}" height="${logo}" preserveAspectRatio="xMidYMid meet"/>`;
   }
   if (label) svg += `<text x="${qrSize / 2}" y="${qrSize + 36}" text-anchor="middle" font-family="Arial, sans-serif" font-size="24" font-weight="700" fill="${escapeAttr(values.qrDark)}">${escapeHtml(label)}</text>`;
