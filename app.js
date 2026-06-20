@@ -26,6 +26,10 @@ const state = {
   qrType: "contact",
   logoDataUrl: "",
   logoImage: null,
+  logoOutlineDataUrl: "",
+  logoOutlineImage: null,
+  history: [],
+  isRestoring: false,
   lastQr: null,
   lastPayload: "",
 };
@@ -93,9 +97,12 @@ function renderGenerator() {
           <h1>QR Contact Generator</h1>
           <p>Create a formal contact-card QR or a direct website QR. Add brand colors, a centered logo, and export clean PNG or SVG files for cards, print, and digital sharing.</p>
         </div>
-        <div class="mode-pill" role="tablist" aria-label="QR type">
-          <button type="button" data-type="contact" class="active">Contact Card</button>
-          <button type="button" data-type="website">Website</button>
+        <div class="top-controls">
+          <button type="button" class="btn undo-btn" id="undoBtn" disabled>Undo</button>
+          <div class="mode-pill" role="tablist" aria-label="QR type">
+            <button type="button" data-type="contact" class="active">Contact Card</button>
+            <button type="button" data-type="website">Website</button>
+          </div>
         </div>
       </header>
 
@@ -200,7 +207,7 @@ function renderGenerator() {
               <label class="field">
                 <span>Logo upload</span>
                 <input id="logoInput" type="file" accept="image/*">
-                <small class="hint">The logo is centered in the exported QR. It is not stored online.</small>
+                <small class="hint">The app uses an outline-only version of the logo so it integrates cleanly in the QR.</small>
               </label>
               <label class="field">
                 <span>Logo border</span>
@@ -246,6 +253,7 @@ function renderGenerator() {
   `;
 
   bindGeneratorEvents();
+  pushHistory();
 }
 
 function field(id, label, value = "", type = "text") {
@@ -258,25 +266,39 @@ function field(id, label, value = "", type = "text") {
 }
 
 function bindGeneratorEvents() {
+  document.getElementById("undoBtn").addEventListener("click", undoLastChange);
+
   document.querySelectorAll(".mode-pill button").forEach((button) => {
     button.addEventListener("click", () => {
+      pushHistory();
       state.qrType = button.dataset.type;
       document.querySelectorAll(".mode-pill button").forEach((b) => b.classList.toggle("active", b === button));
       document.getElementById("contactFields").classList.toggle("hidden", state.qrType !== "contact");
       document.getElementById("websiteFields").classList.toggle("hidden", state.qrType !== "website");
       updateQr();
+      pushHistory();
     });
   });
 
   document.querySelectorAll("input, select, textarea").forEach((input) => {
-    if (input.id !== "logoInput") input.addEventListener("input", updateQr);
+    if (input.id !== "logoInput") {
+      input.addEventListener("focus", pushHistory);
+      input.addEventListener("input", () => {
+        updateQr();
+        pushHistory();
+      });
+    }
   });
 
   document.getElementById("logoInput").addEventListener("change", async (event) => {
+    pushHistory();
     const file = event.target.files && event.target.files[0];
     state.logoDataUrl = file ? await fileToDataUrl(file) : "";
     state.logoImage = state.logoDataUrl ? await loadImage(state.logoDataUrl) : null;
+    state.logoOutlineDataUrl = state.logoImage ? createLogoOutlineDataUrl(state.logoImage) : "";
+    state.logoOutlineImage = state.logoOutlineDataUrl ? await loadImage(state.logoOutlineDataUrl) : null;
     updateQr();
+    pushHistory();
   });
 
   document.getElementById("downloadPng").addEventListener("click", () => downloadPng(1024));
@@ -317,6 +339,7 @@ function collectValues() {
 }
 
 function updateQr() {
+  updateUndoButton();
   const values = collectValues();
   const payload = buildQrPayload(values);
   state.lastPayload = payload;
@@ -395,6 +418,7 @@ function renderStatus(values, payload, error) {
   const contrast = contrastRatio(values.qrDark, values.qrLight);
   items.push([contrast >= 4.5 ? "ok" : "warn", contrast >= 4.5 ? "QR contrast is strong." : "QR contrast is low; scanning may suffer."]);
   items.push([values.logoSize <= 20 ? "ok" : "warn", values.logoSize <= 20 ? "Logo size is within the safe range." : "Logo is above 20%; test before print."]);
+  items.push([state.logoOutlineImage ? "ok" : "warn", state.logoOutlineImage ? "Logo is converted to an outline-only mark." : "No logo uploaded."]);
   if (payload.length > 1200) items.push(["warn", "QR data is long; scan testing is strongly recommended."]);
   document.getElementById("statusList").innerHTML = items.map(([type, text]) => `
     <div class="status-item ${type}">
@@ -567,7 +591,7 @@ function drawQr(ctx, qr, values, x, y, size) {
       drawModule(ctx, px, py, cell, values.moduleStyle);
     }
   }
-  if (state.logoDataUrl) drawLogo(ctx, values, x, y, size);
+  if (state.logoOutlineImage) drawLogo(ctx, values, x, y, size);
 }
 
 function drawModule(ctx, x, y, cell, style) {
@@ -585,7 +609,7 @@ function drawModule(ctx, x, y, cell, style) {
 }
 
 function drawLogo(ctx, values, x, y, size) {
-  const img = state.logoImage;
+  const img = state.logoOutlineImage;
   if (!img) return;
   const logoSize = size * (values.logoSize / 100);
   const cx = x + size / 2 - logoSize / 2;
@@ -607,7 +631,33 @@ function drawLogo(ctx, values, x, y, size) {
       if (values.logoBorder) ctx.stroke();
     }
   }
-  ctx.drawImage(img, cx, cy, logoSize, logoSize);
+  drawTintedImage(ctx, img, cx, cy, logoSize, logoSize, values.qrDark);
+}
+
+function drawTintedImage(ctx, img, x, y, width, height, color) {
+  const off = document.createElement("canvas");
+  off.width = Math.max(1, Math.round(width));
+  off.height = Math.max(1, Math.round(height));
+  const offCtx = off.getContext("2d");
+  offCtx.drawImage(img, 0, 0, off.width, off.height);
+  offCtx.globalCompositeOperation = "source-in";
+  offCtx.fillStyle = color;
+  offCtx.fillRect(0, 0, off.width, off.height);
+  ctx.drawImage(off, x, y, width, height);
+}
+
+function createTintedLogoDataUrl(color) {
+  if (!state.logoOutlineImage) return "";
+  const size = 256;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(state.logoOutlineImage, 0, 0, size, size);
+  ctx.globalCompositeOperation = "source-in";
+  ctx.fillStyle = color;
+  ctx.fillRect(0, 0, size, size);
+  return canvas.toDataURL("image/png");
 }
 
 function roundedRect(ctx, x, y, width, height, radius) {
@@ -640,7 +690,7 @@ function renderSvg(qr, values) {
     }
   }
   svg += `</g>`;
-  if (state.logoDataUrl) {
+  if (state.logoOutlineDataUrl) {
     const logo = qrSize * (values.logoSize / 100);
     const pad = logo * 0.22;
     const x = qrSize / 2 - logo / 2;
@@ -650,7 +700,8 @@ function renderSvg(qr, values) {
       if (values.logoBacking === "circle") svg += `<circle cx="${qrSize / 2}" cy="${qrSize / 2}" r="${bw / 2}" fill="#fff" ${values.logoBorder ? `stroke="rgba(17,24,39,0.18)"` : ""}/>`;
       else svg += `<rect x="${bx}" y="${by}" width="${bw}" height="${bw}" rx="${values.logoBacking === "rounded" ? bw * 0.16 : 0}" fill="#fff" ${values.logoBorder ? `stroke="rgba(17,24,39,0.18)"` : ""}/>`;
     }
-    svg += `<image href="${escapeAttr(state.logoDataUrl)}" x="${x}" y="${y}" width="${logo}" height="${logo}" preserveAspectRatio="xMidYMid meet"/>`;
+    const logoHref = createTintedLogoDataUrl(values.qrDark) || state.logoOutlineDataUrl;
+    svg += `<image href="${escapeAttr(logoHref)}" x="${x}" y="${y}" width="${logo}" height="${logo}" preserveAspectRatio="xMidYMid meet"/>`;
   }
   if (label) svg += `<text x="${qrSize / 2}" y="${qrSize + 36}" text-anchor="middle" font-family="Arial, sans-serif" font-size="24" font-weight="700" fill="${escapeAttr(values.qrDark)}">${escapeHtml(label)}</text>`;
   svg += `</svg>`;
@@ -698,6 +749,89 @@ function fileToDataUrl(file) {
   });
 }
 
+function createLogoOutlineDataUrl(image) {
+  const size = 256;
+  const source = document.createElement("canvas");
+  source.width = size;
+  source.height = size;
+  const sctx = source.getContext("2d", { willReadFrequently: true });
+  sctx.clearRect(0, 0, size, size);
+  const scale = Math.min(size * 0.78 / image.width, size * 0.78 / image.height);
+  const w = image.width * scale;
+  const h = image.height * scale;
+  sctx.drawImage(image, (size - w) / 2, (size - h) / 2, w, h);
+  const data = sctx.getImageData(0, 0, size, size);
+  const pixels = data.data;
+  const bg = averageCornerColor(pixels, size);
+  const mask = new Uint8Array(size * size);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = (y * size + x) * 4;
+      const alpha = pixels[i + 3];
+      if (alpha < 32) continue;
+      const nearBg = colorDistance([pixels[i], pixels[i + 1], pixels[i + 2]], bg) < 46;
+      const nearWhite = pixels[i] > 246 && pixels[i + 1] > 246 && pixels[i + 2] > 246;
+      if (!nearBg && !nearWhite) mask[y * size + x] = 1;
+    }
+  }
+
+  const out = document.createElement("canvas");
+  out.width = size;
+  out.height = size;
+  const octx = out.getContext("2d");
+  const outline = octx.createImageData(size, size);
+  const o = outline.data;
+  const radius = 2;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      if (!mask[y * size + x]) continue;
+      let edge = false;
+      for (let dy = -radius; dy <= radius && !edge; dy++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= size || ny >= size || !mask[ny * size + nx]) {
+            edge = true;
+            break;
+          }
+        }
+      }
+      if (edge) {
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            const nx = x + dx;
+            const ny = y + dy;
+            if (nx < 0 || ny < 0 || nx >= size || ny >= size) continue;
+            const oi = (ny * size + nx) * 4;
+            o[oi] = 0;
+            o[oi + 1] = 0;
+            o[oi + 2] = 0;
+            o[oi + 3] = 255;
+          }
+        }
+      }
+    }
+  }
+  octx.putImageData(outline, 0, 0);
+  return out.toDataURL("image/png");
+}
+
+function averageCornerColor(pixels, size) {
+  const samples = [[0, 0], [size - 1, 0], [0, size - 1], [size - 1, size - 1]];
+  const sum = [0, 0, 0];
+  samples.forEach(([x, y]) => {
+    const i = (y * size + x) * 4;
+    sum[0] += pixels[i];
+    sum[1] += pixels[i + 1];
+    sum[2] += pixels[i + 2];
+  });
+  return sum.map((v) => v / samples.length);
+}
+
+function colorDistance(a, b) {
+  return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+}
+
 function loadImage(src) {
   return new Promise((resolve, reject) => {
     const image = new Image();
@@ -705,6 +839,57 @@ function loadImage(src) {
     image.onerror = reject;
     image.src = src;
   });
+}
+
+function pushHistory() {
+  if (state.isRestoring || !document.getElementById("app")) return;
+  const snapshot = snapshotGenerator();
+  const last = state.history[state.history.length - 1];
+  if (last && JSON.stringify(last) === JSON.stringify(snapshot)) return;
+  state.history.push(snapshot);
+  if (state.history.length > 40) state.history.shift();
+  updateUndoButton();
+}
+
+function snapshotGenerator() {
+  const fields = {};
+  document.querySelectorAll("input, select, textarea").forEach((input) => {
+    if (input.id !== "logoInput") fields[input.id] = input.value;
+  });
+  return {
+    qrType: state.qrType,
+    fields,
+    logoDataUrl: state.logoDataUrl,
+    logoOutlineDataUrl: state.logoOutlineDataUrl,
+  };
+}
+
+async function undoLastChange() {
+  if (state.history.length < 2) return;
+  state.isRestoring = true;
+  state.history.pop();
+  const snapshot = state.history[state.history.length - 1];
+  state.qrType = snapshot.qrType;
+  Object.entries(snapshot.fields).forEach(([id, value]) => {
+    const element = document.getElementById(id);
+    if (element) element.value = value;
+  });
+  document.querySelectorAll(".mode-pill button").forEach((button) => {
+    button.classList.toggle("active", button.dataset.type === state.qrType);
+  });
+  document.getElementById("contactFields").classList.toggle("hidden", state.qrType !== "contact");
+  document.getElementById("websiteFields").classList.toggle("hidden", state.qrType !== "website");
+  state.logoDataUrl = snapshot.logoDataUrl || "";
+  state.logoImage = state.logoDataUrl ? await loadImage(state.logoDataUrl) : null;
+  state.logoOutlineDataUrl = snapshot.logoOutlineDataUrl || "";
+  state.logoOutlineImage = state.logoOutlineDataUrl ? await loadImage(state.logoOutlineDataUrl) : null;
+  state.isRestoring = false;
+  updateQr();
+}
+
+function updateUndoButton() {
+  const undo = document.getElementById("undoBtn");
+  if (undo) undo.disabled = state.history.length < 2;
 }
 
 function base64UrlEncode(text) {
